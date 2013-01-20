@@ -275,7 +275,7 @@ kvm_run' (see below).
 4.11 KVM_GET_REGS
 
 Capability: basic
-Architectures: all
+Architectures: all except ARM
 Type: vcpu ioctl
 Parameters: struct kvm_regs (out)
 Returns: 0 on success, -1 on error
@@ -295,7 +295,7 @@ struct kvm_regs {
 4.12 KVM_SET_REGS
 
 Capability: basic
-Architectures: all
+Architectures: all except ARM
 Type: vcpu ioctl
 Parameters: struct kvm_regs (in)
 Returns: 0 on success, -1 on error
@@ -569,7 +569,7 @@ struct kvm_fpu {
 4.24 KVM_CREATE_IRQCHIP
 
 Capability: KVM_CAP_IRQCHIP
-Architectures: x86, ia64
+Architectures: x86, ia64, ARM
 Type: vm ioctl
 Parameters: none
 Returns: 0 on success, -1 on error
@@ -577,7 +577,8 @@ Returns: 0 on success, -1 on error
 Creates an interrupt controller model in the kernel.  On x86, creates a virtual
 ioapic, a virtual PIC (two PICs, nested), and sets up future vcpus to have a
 local APIC.  IRQ routing for GSIs 0-15 is set to both PIC and IOAPIC; GSI 16-23
-only go to the IOAPIC.  On ia64, a IOSAPIC is created.
+only go to the IOAPIC.  On ia64, a IOSAPIC is created. On ARM, a GIC is
+created.
 
 4.25 KVM_IRQ_LINE
 
@@ -1653,6 +1654,15 @@ registers, find a list below:
         |                       |
   PPC   | KVM_REG_PPC_HIOR      | 64
 
+
+ARM registers are mapped using the lower 32 bits.  The upper 16 of that
+is the register group type, or coprocessor number:
+
+ARM core registers have the following id bit patterns:
+  0x4002 0000 0010 <index into the kvm_regs struct:16>
+
+
+
 4.69 KVM_GET_ONE_REG
 
 Capability: KVM_CAP_ONE_REG
@@ -1668,6 +1678,295 @@ at the memory location pointed to by "addr".
 
 The list of registers accessible using this interface is identical to the
 list in 4.64.
+
+
+4.70 KVM_KVMCLOCK_CTRL
+
+Capability: KVM_CAP_KVMCLOCK_CTRL
+Architectures: Any that implement pvclocks (currently x86 only)
+Type: vcpu ioctl
+Parameters: None
+Returns: 0 on success, -1 on error
+
+This signals to the host kernel that the specified guest is being paused by
+userspace.  The host will set a flag in the pvclock structure that is checked
+from the soft lockup watchdog.  The flag is part of the pvclock structure that
+is shared between guest and host, specifically the second bit of the flags
+field of the pvclock_vcpu_time_info structure.  It will be set exclusively by
+the host and read/cleared exclusively by the guest.  The guest operation of
+checking and clearing the flag must an atomic operation so
+load-link/store-conditional, or equivalent must be used.  There are two cases
+where the guest will clear the flag: when the soft lockup watchdog timer resets
+itself or when a soft lockup is detected.  This ioctl can be called any time
+after pausing the vcpu, but before it is resumed.
+
+
+4.71 KVM_SIGNAL_MSI
+
+Capability: KVM_CAP_SIGNAL_MSI
+Architectures: x86
+Type: vm ioctl
+Parameters: struct kvm_msi (in)
+Returns: >0 on delivery, 0 if guest blocked the MSI, and -1 on error
+
+Directly inject a MSI message. Only valid with in-kernel irqchip that handles
+MSI messages.
+
+struct kvm_msi {
+	__u32 address_lo;
+	__u32 address_hi;
+	__u32 data;
+	__u32 flags;
+	__u8  pad[16];
+};
+
+No flags are defined so far. The corresponding field must be 0.
+
+
+4.71 KVM_CREATE_PIT2
+
+Capability: KVM_CAP_PIT2
+Architectures: x86
+Type: vm ioctl
+Parameters: struct kvm_pit_config (in)
+Returns: 0 on success, -1 on error
+
+Creates an in-kernel device model for the i8254 PIT. This call is only valid
+after enabling in-kernel irqchip support via KVM_CREATE_IRQCHIP. The following
+parameters have to be passed:
+
+struct kvm_pit_config {
+	__u32 flags;
+	__u32 pad[15];
+};
+
+Valid flags are:
+
+#define KVM_PIT_SPEAKER_DUMMY     1 /* emulate speaker port stub */
+
+PIT timer interrupts may use a per-VM kernel thread for injection. If it
+exists, this thread will have a name of the following pattern:
+
+kvm-pit/<owner-process-pid>
+
+When running a guest with elevated priorities, the scheduling parameters of
+this thread may have to be adjusted accordingly.
+
+This IOCTL replaces the obsolete KVM_CREATE_PIT.
+
+
+4.72 KVM_GET_PIT2
+
+Capability: KVM_CAP_PIT_STATE2
+Architectures: x86
+Type: vm ioctl
+Parameters: struct kvm_pit_state2 (out)
+Returns: 0 on success, -1 on error
+
+Retrieves the state of the in-kernel PIT model. Only valid after
+KVM_CREATE_PIT2. The state is returned in the following structure:
+
+struct kvm_pit_state2 {
+	struct kvm_pit_channel_state channels[3];
+	__u32 flags;
+	__u32 reserved[9];
+};
+
+Valid flags are:
+
+/* disable PIT in HPET legacy mode */
+#define KVM_PIT_FLAGS_HPET_LEGACY  0x00000001
+
+This IOCTL replaces the obsolete KVM_GET_PIT.
+
+
+4.73 KVM_SET_PIT2
+
+Capability: KVM_CAP_PIT_STATE2
+Architectures: x86
+Type: vm ioctl
+Parameters: struct kvm_pit_state2 (in)
+Returns: 0 on success, -1 on error
+
+Sets the state of the in-kernel PIT model. Only valid after KVM_CREATE_PIT2.
+See KVM_GET_PIT2 for details on struct kvm_pit_state2.
+
+This IOCTL replaces the obsolete KVM_SET_PIT.
+
+
+4.74 KVM_PPC_GET_SMMU_INFO
+
+Capability: KVM_CAP_PPC_GET_SMMU_INFO
+Architectures: powerpc
+Type: vm ioctl
+Parameters: None
+Returns: 0 on success, -1 on error
+
+This populates and returns a structure describing the features of
+the "Server" class MMU emulation supported by KVM.
+This can in turn be used by userspace to generate the appropariate
+device-tree properties for the guest operating system.
+
+The structure contains some global informations, followed by an
+array of supported segment page sizes:
+
+      struct kvm_ppc_smmu_info {
+	     __u64 flags;
+	     __u32 slb_size;
+	     __u32 pad;
+	     struct kvm_ppc_one_seg_page_size sps[KVM_PPC_PAGE_SIZES_MAX_SZ];
+      };
+
+The supported flags are:
+
+    - KVM_PPC_PAGE_SIZES_REAL:
+        When that flag is set, guest page sizes must "fit" the backing
+        store page sizes. When not set, any page size in the list can
+        be used regardless of how they are backed by userspace.
+
+    - KVM_PPC_1T_SEGMENTS
+        The emulated MMU supports 1T segments in addition to the
+        standard 256M ones.
+
+The "slb_size" field indicates how many SLB entries are supported
+
+The "sps" array contains 8 entries indicating the supported base
+page sizes for a segment in increasing order. Each entry is defined
+as follow:
+
+   struct kvm_ppc_one_seg_page_size {
+	__u32 page_shift;	/* Base page shift of segment (or 0) */
+	__u32 slb_enc;		/* SLB encoding for BookS */
+	struct kvm_ppc_one_page_size enc[KVM_PPC_PAGE_SIZES_MAX_SZ];
+   };
+
+An entry with a "page_shift" of 0 is unused. Because the array is
+organized in increasing order, a lookup can stop when encoutering
+such an entry.
+
+The "slb_enc" field provides the encoding to use in the SLB for the
+page size. The bits are in positions such as the value can directly
+be OR'ed into the "vsid" argument of the slbmte instruction.
+
+The "enc" array is a list which for each of those segment base page
+size provides the list of supported actual page sizes (which can be
+only larger or equal to the base page size), along with the
+corresponding encoding in the hash PTE. Similarily, the array is
+8 entries sorted by increasing sizes and an entry with a "0" shift
+is an empty entry and a terminator:
+
+   struct kvm_ppc_one_page_size {
+	__u32 page_shift;	/* Page shift (or 0) */
+	__u32 pte_enc;		/* Encoding in the HPTE (>>12) */
+   };
+
+The "pte_enc" field provides a value that can OR'ed into the hash
+PTE's RPN field (ie, it needs to be shifted left by 12 to OR it
+into the hash PTE second double word).
+
+4.75 KVM_IRQFD
+
+Capability: KVM_CAP_IRQFD
+Architectures: x86
+Type: vm ioctl
+Parameters: struct kvm_irqfd (in)
+Returns: 0 on success, -1 on error
+
+Allows setting an eventfd to directly trigger a guest interrupt.
+kvm_irqfd.fd specifies the file descriptor to use as the eventfd and
+kvm_irqfd.gsi specifies the irqchip pin toggled by this event.  When
+an event is tiggered on the eventfd, an interrupt is injected into
+the guest using the specified gsi pin.  The irqfd is removed using
+the KVM_IRQFD_FLAG_DEASSIGN flag, specifying both kvm_irqfd.fd
+and kvm_irqfd.gsi.
+
+With KVM_CAP_IRQFD_RESAMPLE, KVM_IRQFD supports a de-assert and notify
+mechanism allowing emulation of level-triggered, irqfd-based
+interrupts.  When KVM_IRQFD_FLAG_RESAMPLE is set the user must pass an
+additional eventfd in the kvm_irqfd.resamplefd field.  When operating
+in resample mode, posting of an interrupt through kvm_irq.fd asserts
+the specified gsi in the irqchip.  When the irqchip is resampled, such
+as from an EOI, the gsi is de-asserted and the user is notifed via
+kvm_irqfd.resamplefd.  It is the user's responsibility to re-queue
+the interrupt if the device making use of it still requires service.
+Note that closing the resamplefd is not sufficient to disable the
+irqfd.  The KVM_IRQFD_FLAG_RESAMPLE is only necessary on assignment
+and need not be specified with KVM_IRQFD_FLAG_DEASSIGN.
+
+4.76 KVM_PPC_ALLOCATE_HTAB
+
+Capability: KVM_CAP_PPC_ALLOC_HTAB
+Architectures: powerpc
+Type: vm ioctl
+Parameters: Pointer to u32 containing hash table order (in/out)
+Returns: 0 on success, -1 on error
+
+This requests the host kernel to allocate an MMU hash table for a
+guest using the PAPR paravirtualization interface.  This only does
+anything if the kernel is configured to use the Book 3S HV style of
+virtualization.  Otherwise the capability doesn't exist and the ioctl
+returns an ENOTTY error.  The rest of this description assumes Book 3S
+HV.
+
+There must be no vcpus running when this ioctl is called; if there
+are, it will do nothing and return an EBUSY error.
+
+The parameter is a pointer to a 32-bit unsigned integer variable
+containing the order (log base 2) of the desired size of the hash
+table, which must be between 18 and 46.  On successful return from the
+ioctl, it will have been updated with the order of the hash table that
+was allocated.
+
+If no hash table has been allocated when any vcpu is asked to run
+(with the KVM_RUN ioctl), the host kernel will allocate a
+default-sized hash table (16 MB).
+
+If this ioctl is called when a hash table has already been allocated,
+the kernel will clear out the existing hash table (zero all HPTEs) and
+return the hash table order in the parameter.  (If the guest is using
+the virtualized real-mode area (VRMA) facility, the kernel will
+re-create the VMRA HPTEs on the next KVM_RUN of any vcpu.)
+
+
+4.77 KVM_ARM_VCPU_INIT
+
+Capability: basic
+Architectures: arm
+Type: vcpu ioctl
+Parameters: struct struct kvm_vcpu_init (in)
+Returns: 0 on success; -1 on error
+Errors:
+  EINVAL:    the target is unknown, or the combination of features is invalid.
+  ENOENT:    a features bit specified is unknown.
+
+This tells KVM what type of CPU to present to the guest, and what
+optional features it should have.  This will cause a reset of the cpu
+registers to their initial values.  If this is not called, KVM_RUN will
+return ENOEXEC for that vcpu.
+
+Note that because some registers reflect machine topology, all vcpus
+should be created before this ioctl is invoked.
+
+
+4.78 KVM_GET_REG_LIST
+
+Capability: basic
+Architectures: arm
+Type: vcpu ioctl
+Parameters: struct kvm_reg_list (in/out)
+Returns: 0 on success; -1 on error
+Errors:
+  E2BIG:     the reg index list is too big to fit in the array specified by
+             the user (the number required will be written into n).
+
+struct kvm_reg_list {
+	__u64 n; /* number of registers in reg[] */
+	__u64 reg[0];
+};
+
+This ioctl returns the guest registers that are supported for the
+KVM_GET_ONE_REG/KVM_SET_ONE_REG calls.
+
 
 5. The kvm_run structure
 
