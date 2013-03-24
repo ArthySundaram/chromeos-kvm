@@ -17,7 +17,9 @@
 #include <linux/percpu.h>
 #include <linux/node.h>
 #include <linux/nodemask.h>
+#include <linux/of.h>
 #include <linux/sched.h>
+#include <linux/slab.h>
 
 #include <asm/cputype.h>
 #include <asm/topology.h>
