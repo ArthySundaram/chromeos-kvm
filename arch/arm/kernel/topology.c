@@ -298,4 +298,5 @@ void init_cpu_topology(void)
 		cpumask_clear(&cpu_topo->thread_sibling);
 	}
 	smp_wmb();
+	parse_dt_topology();
 }
